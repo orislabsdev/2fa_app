@@ -26,6 +26,13 @@ from storage import StorageManager
 from gui import PasswordDialog, MainApp
 
 
+def get_asset_path(filename: str) -> Path:
+    """Get absolute path to asset, works for dev and for PyInstaller."""
+    if hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS) / "assets" / filename
+    return Path(__file__).parent / "assets" / filename
+
+
 def main() -> None:
     """Application entry point."""
     # ── CustomTkinter global settings ──────────────────────────────────────
@@ -42,6 +49,15 @@ def main() -> None:
     # ── Root window (hidden until after authentication) ────────────────────
     root = ctk.CTk()
     root.withdraw()   # Keep hidden during the password dialog
+
+    try:
+        from PIL import Image, ImageTk
+        icon_path = get_asset_path("icon.png")
+        if icon_path.exists():
+            img = ImageTk.PhotoImage(Image.open(icon_path))
+            root.iconphoto(False, img)
+    except Exception as e:
+        print(f"Warning: Could not load application icon: {e}")
 
     # ── Password dialog ────────────────────────────────────────────────────
     is_new_setup = not storage.is_initialized()
