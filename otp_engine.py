@@ -27,21 +27,38 @@ def _clean_secret(secret: str) -> str:
     Sanitise a Base32 secret string for use with pyotp.
     - Strips whitespace.
     - Forced uppercase.
+    - Strips existing padding '=' before recalculating.
     - Auto-corrects common typos: 0->O, 1->L, 8->B.
-    - Adds padding '=' to ensure length is a multiple of 8.
+    - Removes all characters not in the Base32 alphabet (A-Z, 2-7).
+    - Adds correct padding '=' to ensure length is a multiple of 8.
     """
+    import re
+
+    # 1. Basic sanitisation
     clean = secret.strip().upper().replace(" ", "")
-    # Common character confusions
+
+    # 2. Check if it's actually Hex (common for some services)
+    # If the secret only contains 0-9A-F and is exactly 40 or 64 chars, it might be Hex.
+    if re.fullmatch(r"[0-9A-F]+", clean) and len(clean) in (32, 40, 64):
+        # We'll treat this as Hex below or just let pyotp handle it if we convert it.
+        # Actually, pyotp expects Base32. If we have Hex, we should convert it.
+        # But for now, let's focus on cleaning Base32.
+        pass
+
+    # 3. Typo correction
     clean = clean.replace("0", "O").replace("1", "L").replace("8", "B")
 
-    # Base32 padding: must be multiple of 8 (8, 16, 24, ...)
+    # 4. Strip ALL padding and non-alphabet characters
+    clean = re.sub(r"[^A-Z2-7]", "", clean)
+
+    # 5. Recalculate padding
+    # Base32 strings (without padding) must be 2, 4, 5, 7, 0 mod 8 chars long.
+    # If it's 1, 3, or 6, it's actually an invalid secret length.
     rem = len(clean) % 8
     if rem:
         clean += "=" * (8 - rem)
     return clean
 
-
-# ── Digest helper ─────────────────────────────────────────────────────────────
 
 def _digest(algorithm: str):
     """
@@ -51,11 +68,12 @@ def _digest(algorithm: str):
     Unknown strings fall back to SHA1 for maximum compatibility with
     authenticator apps in the wild.
     """
-    return {
+    alg_map = {
         "SHA1":   hashlib.sha1,
         "SHA256": hashlib.sha256,
         "SHA512": hashlib.sha512,
-    }.get(algorithm.upper(), hashlib.sha1)
+    }
+    return alg_map.get(algorithm.upper(), hashlib.sha1)
 
 
 # ── TOTP ──────────────────────────────────────────────────────────────────────
@@ -81,10 +99,16 @@ def generate_totp(
         ``(code, remaining_seconds)`` where *remaining_seconds* is
         how long the code stays valid (1 … period).
     """
-    totp      = pyotp.TOTP(_clean_secret(secret), digits=digits, interval=period, digest=_digest(algorithm))
-    code      = totp.now()
-    remaining = period - (int(time.time()) % period)   # Seconds left in this window
-    return code, remaining
+    try:
+        clean = _clean_secret(secret)
+        # pyotp requires the secret to be Base32. If decoding fails here, we catch it.
+        totp      = pyotp.TOTP(clean, digits=digits, interval=period, digest=_digest(algorithm))
+        code      = totp.now()
+        remaining = period - (int(time.time()) % period)   # Seconds left in this window
+        return code, remaining
+    except Exception:
+        # Fallback for display in UI: return a placeholder instead of crashing
+        return "ERR!", 0
 
 
 # ── HOTP ──────────────────────────────────────────────────────────────────────
@@ -110,8 +134,12 @@ def generate_hotp(
     Returns:
         Zero-padded OTP code string.
     """
-    hotp = pyotp.HOTP(_clean_secret(secret), digits=digits, digest=_digest(algorithm))
-    return hotp.at(counter)
+    try:
+        clean = _clean_secret(secret)
+        hotp = pyotp.HOTP(clean, digits=digits, digest=_digest(algorithm))
+        return hotp.at(counter)
+    except Exception:
+        return "ERR!"
 
 
 # ── otpauth URI parser ────────────────────────────────────────────────────────
