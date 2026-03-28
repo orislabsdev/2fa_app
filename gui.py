@@ -13,11 +13,8 @@ MainApp          : Root application window and update loop.
 
 from __future__ import annotations
 
-import math
-import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, StringVar
-from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
@@ -25,6 +22,7 @@ import pyotp
 
 from storage import StorageManager
 from otp_engine import (
+    _clean_secret,
     decode_qr_from_image,
     generate_hotp,
     generate_totp,
@@ -497,9 +495,9 @@ class AddAccountDialog(ctk.CTkToplevel):
             self._err_var.set("Secret key is required.")
             return
 
-        # Quick pyotp validation to catch clearly invalid Base32 secrets early
+        # Quick pyotp validation with enhanced cleaning logic
         try:
-            pyotp.TOTP(secret).now()
+            pyotp.TOTP(_clean_secret(secret)).now()
         except Exception:
             self._err_var.set("⚠  Invalid secret key — must be Base32 encoded.")
             return
@@ -597,7 +595,6 @@ class AccountCard(ctk.CTkFrame):
         self._issuer_lbl.pack(anchor="w")
 
         # Account name
-        name_text = self.account.get("issuer") or self.account["name"]
         self._name_lbl = ctk.CTkLabel(
             identity, text=self.account["name"],
             font=F_BTN, text_color=TEXT_PRI, anchor="w",

@@ -20,6 +20,27 @@ from urllib.parse import urlparse, parse_qs, unquote
 import pyotp
 
 
+# ── Secret cleaning ───────────────────────────────────────────────────────────
+
+def _clean_secret(secret: str) -> str:
+    """
+    Sanitise a Base32 secret string for use with pyotp.
+    - Strips whitespace.
+    - Forced uppercase.
+    - Auto-corrects common typos: 0->O, 1->L, 8->B.
+    - Adds padding '=' to ensure length is a multiple of 8.
+    """
+    clean = secret.strip().upper().replace(" ", "")
+    # Common character confusions
+    clean = clean.replace("0", "O").replace("1", "L").replace("8", "B")
+
+    # Base32 padding: must be multiple of 8 (8, 16, 24, ...)
+    rem = len(clean) % 8
+    if rem:
+        clean += "=" * (8 - rem)
+    return clean
+
+
 # ── Digest helper ─────────────────────────────────────────────────────────────
 
 def _digest(algorithm: str):
@@ -60,7 +81,7 @@ def generate_totp(
         ``(code, remaining_seconds)`` where *remaining_seconds* is
         how long the code stays valid (1 … period).
     """
-    totp      = pyotp.TOTP(secret, digits=digits, interval=period, digest=_digest(algorithm))
+    totp      = pyotp.TOTP(_clean_secret(secret), digits=digits, interval=period, digest=_digest(algorithm))
     code      = totp.now()
     remaining = period - (int(time.time()) % period)   # Seconds left in this window
     return code, remaining
@@ -89,7 +110,7 @@ def generate_hotp(
     Returns:
         Zero-padded OTP code string.
     """
-    hotp = pyotp.HOTP(secret, digits=digits, digest=_digest(algorithm))
+    hotp = pyotp.HOTP(_clean_secret(secret), digits=digits, digest=_digest(algorithm))
     return hotp.at(counter)
 
 
@@ -135,7 +156,7 @@ def parse_otpauth_uri(uri: str) -> dict | None:
             """Extract first value from a parse_qs dict, falling back to *default*."""
             return params.get(key, [default])[0]
 
-        secret    = _p("secret",    "").upper().replace(" ", "")
+        secret    = _clean_secret(_p("secret", ""))
         issuer    = _p("issuer",    issuer_label).strip() or issuer_label.strip()
         digits    = int(_p("digits",    "6"))
         algorithm = _p("algorithm", "SHA1").upper()
