@@ -92,7 +92,6 @@ class PasswordDialog(ctk.CTkToplevel):
         self.geometry("460x560")
         self.resizable(False, False)
         self.configure(fg_color=BG_DEEP)
-        self.grab_set()                              # Modal behaviour
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self._build()
         self.after(80, self._center_on_screen)
@@ -146,13 +145,13 @@ class PasswordDialog(ctk.CTkToplevel):
 
         # Password field
         self._pwd_var = StringVar()
-        self._pwd_entry = self._field(form, "Master Password", self._pwd_var, show="•")
+        self._pwd_entry = self._field(form, "Master Password", self._pwd_var, show="*")
 
         # Confirm field (new setup only)
         self._confirm_var   = StringVar()
         self._confirm_entry = None
         if self._is_new:
-            self._confirm_entry = self._field(form, "Confirm Password", self._confirm_var, show="•")
+            self._confirm_entry = self._field(form, "Confirm Password", self._confirm_var, show="*")
 
         # Error message (hidden until needed)
         self._err_var = StringVar()
@@ -171,7 +170,6 @@ class PasswordDialog(ctk.CTkToplevel):
         ).pack(fill="x")
 
         self.bind("<Return>", lambda _e: self._submit())
-        self._pwd_entry.focus()
 
     def _field(
         self,
@@ -198,12 +196,13 @@ class PasswordDialog(ctk.CTkToplevel):
 
     def _submit(self) -> None:
         """Validate the entered password(s) and close the dialog."""
-        pwd = self._pwd_var.get()
+        # Use direct .get() for consistency between CTk versions
+        pwd = self._pwd_entry.get()
         if len(pwd) < 4:
             self._err_var.set("Password must be at least 4 characters.")
             return
         if self._is_new and self._confirm_entry:
-            if pwd != self._confirm_var.get():
+            if pwd != self._confirm_entry.get():
                 self._err_var.set("Passwords do not match.")
                 return
         self.password = pwd
@@ -215,11 +214,17 @@ class PasswordDialog(ctk.CTkToplevel):
         self.destroy()
 
     def _center_on_screen(self) -> None:
-        """Move the dialog to the centre of the primary monitor."""
+        """Move the dialog to the centre of the primary monitor and grab focus."""
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w,  h  = self.winfo_width(),       self.winfo_height()
         self.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        # On macOS, modal grab and lift should happen after mapping
+        self.lift()
+        self.focus_force()
+        self.grab_set()
+        self._pwd_entry.focus()
 
 
 # ── Add-account dialog ────────────────────────────────────────────────────────
