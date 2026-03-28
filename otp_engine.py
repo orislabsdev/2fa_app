@@ -13,7 +13,7 @@ scan_qr_from_webcam()                             -> uri string | None
 
 from __future__ import annotations
 
-import hashlib
+from hashlib import sha1, sha256, sha512
 import time
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -21,6 +21,7 @@ import pyotp
 
 
 # ── Secret cleaning ───────────────────────────────────────────────────────────
+
 
 def _clean_secret(secret: str) -> str:
     """
@@ -38,12 +39,15 @@ def _clean_secret(secret: str) -> str:
     clean = secret.strip().upper().replace(" ", "")
 
     # 2. Check if it's actually Hex (common for some services)
-    # If the secret only contains 0-9A-F and is exactly 40 or 64 chars, it might be Hex.
+    # If the secret only contains 0-9A-F and is exactly 32, 40 or 64 chars, it might be Hex.
     if re.fullmatch(r"[0-9A-F]+", clean) and len(clean) in (32, 40, 64):
-        # We'll treat this as Hex below or just let pyotp handle it if we convert it.
-        # Actually, pyotp expects Base32. If we have Hex, we should convert it.
-        # But for now, let's focus on cleaning Base32.
-        pass
+        import base64
+
+        try:
+            raw_bytes = bytes.fromhex(clean)
+            return base64.b32encode(raw_bytes).decode("ascii")
+        except ValueError:
+            pass
 
     # 3. Typo correction
     clean = clean.replace("0", "O").replace("1", "L").replace("8", "B")
@@ -68,20 +72,24 @@ def _digest(algorithm: str):
     Unknown strings fall back to SHA1 for maximum compatibility with
     authenticator apps in the wild.
     """
-    alg_map = {
-        "SHA1":   hashlib.sha1,
-        "SHA256": hashlib.sha256,
-        "SHA512": hashlib.sha512,
-    }
-    return alg_map.get(algorithm.upper(), hashlib.sha1)
+    alg = algorithm.upper()
+    if alg == "SHA1":
+        return sha1
+    elif alg == "SHA256":
+        return sha256
+    elif alg == "SHA512":
+        return sha512
+    else:
+        return sha1
 
 
 # ── TOTP ──────────────────────────────────────────────────────────────────────
 
+
 def generate_totp(
-    secret:    str,
-    digits:    int = 6,
-    period:    int = 30,
+    secret: str,
+    digits: int = 6,
+    period: int = 30,
     algorithm: str = "SHA1",
 ) -> tuple[str, int]:
     """
@@ -102,9 +110,11 @@ def generate_totp(
     try:
         clean = _clean_secret(secret)
         # pyotp requires the secret to be Base32. If decoding fails here, we catch it.
-        totp      = pyotp.TOTP(clean, digits=digits, interval=period, digest=_digest(algorithm))
-        code      = totp.now()
-        remaining = period - (int(time.time()) % period)   # Seconds left in this window
+        totp = pyotp.TOTP(
+            clean, digits=digits, interval=period, digest=_digest(algorithm)
+        )
+        code = totp.now()
+        remaining = period - (int(time.time()) % period)  # Seconds left in this window
         return code, remaining
     except Exception:
         # Fallback for display in UI: return a placeholder instead of crashing
@@ -113,10 +123,11 @@ def generate_totp(
 
 # ── HOTP ──────────────────────────────────────────────────────────────────────
 
+
 def generate_hotp(
-    secret:    str,
-    counter:   int,
-    digits:    int = 6,
+    secret: str,
+    counter: int,
+    digits: int = 6,
     algorithm: str = "SHA1",
 ) -> str:
     """
@@ -144,6 +155,7 @@ def generate_hotp(
 
 # ── otpauth URI parser ────────────────────────────────────────────────────────
 
+
 def parse_otpauth_uri(uri: str) -> dict | None:
     """
     Parse an ``otpauth://`` URI (typically encoded in a QR code) into an
@@ -166,8 +178,8 @@ def parse_otpauth_uri(uri: str) -> dict | None:
         return None
 
     try:
-        parsed   = urlparse(uri)
-        otp_type = parsed.netloc.lower()   # 'totp' or 'hotp'
+        parsed = urlparse(uri)
+        otp_type = parsed.netloc.lower()  # 'totp' or 'hotp'
         if otp_type not in ("totp", "hotp"):
             return None
 
@@ -184,31 +196,34 @@ def parse_otpauth_uri(uri: str) -> dict | None:
             """Extract first value from a parse_qs dict, falling back to *default*."""
             return params.get(key, [default])[0]
 
-        secret    = _clean_secret(_p("secret", ""))
-        issuer    = _p("issuer",    issuer_label).strip() or issuer_label.strip()
-        digits    = int(_p("digits",    "6"))
+        secret = _clean_secret(_p("secret", ""))
+        issuer = _p("issuer", issuer_label).strip() or issuer_label.strip()
+        digits = int(_p("digits", "6"))
         algorithm = _p("algorithm", "SHA1").upper()
-        period    = int(_p("period",    "30"))
-        counter   = int(_p("counter",   "0"))
+        period = int(_p("period", "30"))
+        counter = int(_p("counter", "0"))
 
         if not secret:
-            return None   # Secret is mandatory
+            return None  # Secret is mandatory
 
         return {
-            "name":      name.strip() or "Unknown",
-            "issuer":    issuer,
-            "secret":    secret,
-            "type":      otp_type,
-            "digits":    digits    if digits    in (6, 8)                        else 6,
-            "algorithm": algorithm if algorithm in ("SHA1", "SHA256", "SHA512")  else "SHA1",
-            "period":    period    if period    > 0                              else 30,
-            "counter":   counter   if counter   >= 0                             else 0,
+            "name": name.strip() or "Unknown",
+            "issuer": issuer,
+            "secret": secret,
+            "type": otp_type,
+            "digits": digits if digits in (6, 8) else 6,
+            "algorithm": algorithm
+            if algorithm in ("SHA1", "SHA256", "SHA512")
+            else "SHA1",
+            "period": period if period > 0 else 30,
+            "counter": counter if counter >= 0 else 0,
         }
     except Exception:
         return None
 
 
 # ── QR decoding ───────────────────────────────────────────────────────────────
+
 
 def decode_qr_from_image(image_path: str) -> str | None:
     """
@@ -236,29 +251,30 @@ def decode_qr_from_image(image_path: str) -> str | None:
         if img is None:
             # OpenCV may fail on certain formats (WebP, HEIC) — try Pillow
             from PIL import Image as _PilImage
+
             pil = _PilImage.open(image_path).convert("RGB")
-            img = np.array(pil)[:, :, ::-1]   # RGB → BGR for OpenCV
+            img = np.array(pil)[:, :, ::-1]  # RGB → BGR for OpenCV
 
         detector = cv2.QRCodeDetector()
         data, _pts, _straight = detector.detectAndDecode(img)
         if data:
             return data
     except ImportError:
-        pass   # OpenCV not installed; fall through to pyzbar
+        pass  # OpenCV not installed; fall through to pyzbar
 
     # ── Strategy 2: pyzbar ─────────────────────────────────────────────────
     try:
         from pyzbar.pyzbar import decode as pyzbar_decode
         from PIL import Image as _PilImage
 
-        img     = _PilImage.open(image_path)
+        img = _PilImage.open(image_path)
         results = pyzbar_decode(img)
         if results:
             return results[0].data.decode("utf-8")
     except ImportError:
-        pass   # pyzbar not installed either
+        pass  # pyzbar not installed either
 
-    return None   # Both strategies failed
+    return None  # Both strategies failed
 
 
 def scan_qr_from_webcam() -> str | None:
@@ -275,14 +291,14 @@ def scan_qr_from_webcam() -> str | None:
     try:
         import cv2
     except ImportError:
-        return None   # OpenCV not available
+        return None  # OpenCV not available
 
-    cap = cv2.VideoCapture(0)   # Default camera (index 0)
+    cap = cv2.VideoCapture(0)  # Default camera (index 0)
     if not cap.isOpened():
         return None
 
     detector = cv2.QRCodeDetector()
-    result   = None
+    result = None
 
     try:
         while True:
@@ -295,21 +311,28 @@ def scan_qr_from_webcam() -> str | None:
             if data and bbox is not None:
                 # Draw a green polygon around the detected QR code
                 pts = bbox.astype(int).reshape((-1, 1, 2))
-                cv2.polylines(frame, [pts], isClosed=True, color=(0, 220, 80), thickness=3)
+                cv2.polylines(
+                    frame, [pts], isClosed=True, color=(0, 220, 80), thickness=3
+                )
                 cv2.putText(
-                    frame, "QR Detected — press any key",
-                    (12, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 220, 80), 2,
+                    frame,
+                    "QR Detected — press any key",
+                    (12, 34),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.85,
+                    (0, 220, 80),
+                    2,
                 )
                 result = data
 
             cv2.imshow("Scan QR Code  (Q = cancel)", frame)
             key = cv2.waitKey(1) & 0xFF
 
-            if key in (ord("q"), ord("Q"), 27):   # Q or Escape → cancel
+            if key in (ord("q"), ord("Q"), 27):  # Q or Escape → cancel
                 result = None
                 break
-            if result:                             # Any other key OR auto-close
-                time.sleep(0.4)                    # Brief pause so user sees the highlight
+            if result:  # Any other key OR auto-close
+                time.sleep(0.4)  # Brief pause so user sees the highlight
                 break
     finally:
         cap.release()

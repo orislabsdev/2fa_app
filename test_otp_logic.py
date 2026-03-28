@@ -8,6 +8,7 @@ def test_cleaning():
         ("JBSWY3DPEHPK3PXP====", "JBSWY3DPEHPK3PXP"),    # Excessive padding (should be stripped)
         ("JBSW018",            "JBSWOLB="),              # Typos 0->O, 1->L, 8->B
         ("JBSW9!!!",           "JBSW===="),              # Non-alphabet removal
+        ("31323334353637383930414243444546", "GEZDGNBVGY3TQOJQIFBEGRCFIY======"), # 32-char Hex to Base32
     ]
     for raw, expected in cases:
         result = _clean_secret(raw)
