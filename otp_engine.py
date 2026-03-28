@@ -14,6 +14,7 @@ scan_qr_from_webcam()                             -> uri string | None
 from __future__ import annotations
 
 from hashlib import sha1, sha256, sha512
+import re
 import time
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -24,43 +25,17 @@ import pyotp
 
 
 def _clean_secret(secret: str) -> str:
-    """
-    Sanitise a Base32 secret string for use with pyotp.
-    - Strips whitespace.
-    - Forced uppercase.
-    - Strips existing padding '=' before recalculating.
-    - Auto-corrects common typos: 0->O, 1->L, 8->B.
-    - Removes all characters not in the Base32 alphabet (A-Z, 2-7).
-    - Adds correct padding '=' to ensure length is a multiple of 8.
-    """
-    import re
+    """Limpieza mínima y segura para pyotp"""
+    clean = secret.strip().upper().replace(" ", "").replace("-", "")
+    # Eliminar cualquier cosa que no sea Base32 válido
+    clean = re.sub(r"[^A-Z2-7=]", "", clean)
 
-    # 1. Basic sanitisation
-    clean = secret.strip().upper().replace(" ", "")
-
-    # 2. Check if it's actually Hex (common for some services)
-    # If the secret only contains 0-9A-F and is exactly 32, 40 or 64 chars, it might be Hex.
-    if re.fullmatch(r"[0-9A-F]+", clean) and len(clean) in (32, 40, 64):
-        import base64
-
-        try:
-            raw_bytes = bytes.fromhex(clean)
-            return base64.b32encode(raw_bytes).decode("ascii")
-        except ValueError:
-            pass
-
-    # 3. Typo correction
-    clean = clean.replace("0", "O").replace("1", "L").replace("8", "B")
-
-    # 4. Strip ALL padding and non-alphabet characters
-    clean = re.sub(r"[^A-Z2-7]", "", clean)
-
-    # 5. Recalculate padding
-    # Base32 strings (without padding) must be 2, 4, 5, 7, 0 mod 8 chars long.
-    # If it's 1, 3, or 6, it's actually an invalid secret length.
+    # Quitar padding existente y recalcularlo correctamente
+    clean = clean.rstrip("=")
     rem = len(clean) % 8
     if rem:
         clean += "=" * (8 - rem)
+
     return clean
 
 
@@ -81,6 +56,7 @@ def _digest(algorithm: str):
         return sha512
     else:
         return sha1
+
 
 # ── TOTP ──────────────────────────────────────────────────────────────────────
 
@@ -108,16 +84,14 @@ def generate_totp(
     """
     try:
         clean = _clean_secret(secret)
-        # pyotp requires the secret to be Base32. If decoding fails here, we catch it.
         totp = pyotp.TOTP(
             clean, digits=digits, interval=period, digest=_digest(algorithm)
         )
         code = totp.now()
-        remaining = period - (int(time.time()) % period)  # Seconds left in this window
+        remaining = period - (int(time.time()) % period)
         return code, remaining
-    except Exception:
-        # Fallback for display in UI: return a placeholder instead of crashing
-        return "ERR!", 0
+    except Exception as e:
+        raise RuntimeError(f"TOTP generation failed: {e}") from e
 
 
 # ── HOTP ──────────────────────────────────────────────────────────────────────
